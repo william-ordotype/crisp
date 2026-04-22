@@ -2,11 +2,51 @@ window.$crisp = [];
 window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
 
 (function() {
-  const d = document;
-  const s = d.createElement("script");
-  s.src = "https://client.crisp.chat/l.js";
-  s.async = 1;
-  d.getElementsByTagName("head")[0].appendChild(s);
+  var COOKIE_NAME = "fs-cc";
+
+  function isLoggedIn() {
+    try {
+      var raw = localStorage.getItem("_ms-mem");
+      if (!raw) return false;
+      var m = JSON.parse(raw);
+      return !!(m && m.id);
+    } catch (e) { return false; }
+  }
+
+  function readConsents() {
+    var match = document.cookie.match(new RegExp("(^| )" + COOKIE_NAME + "=([^;]+)"));
+    if (!match) return null;
+    try {
+      var data = JSON.parse(decodeURIComponent(match[2]));
+      return data && data.consents ? data.consents : null;
+    } catch (e) { return null; }
+  }
+
+  function canLoad() {
+    // Logged-in users: chat is customer support under the service contract
+    if (isLoggedIn()) return true;
+    // Anonymous: only load if analytics consent is granted (Crisp sets visitor cookies)
+    var c = readConsents();
+    return !!(c && c.analytics);
+  }
+
+  var injected = false;
+  function inject() {
+    if (injected) return;
+    injected = true;
+    var d = document;
+    var s = d.createElement("script");
+    s.src = "https://client.crisp.chat/l.js";
+    s.async = 1;
+    d.getElementsByTagName("head")[0].appendChild(s);
+  }
+
+  function tryInject() {
+    if (canLoad()) inject();
+  }
+
+  tryInject();
+  window.addEventListener("ordo:consent-updated", tryInject);
 })();
 
 function pushCrispData() {
