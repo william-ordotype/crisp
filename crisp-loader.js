@@ -4,6 +4,7 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
 (function() {
   var COOKIE_NAME = "fs-cc";
   var IDLE_TIMEOUT_MS = 5000;
+  var INTERACTION_DELAY_MS = 500;
   var INTERACTION_EVENTS = ['mousemove', 'scroll', 'keydown', 'touchstart'];
 
   function isLoggedIn() {
@@ -52,18 +53,19 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
     lazyArmed = true;
 
     var idleTimer;
-    function trigger() {
+    function onInteraction() {
       if (idleTimer) clearTimeout(idleTimer);
       INTERACTION_EVENTS.forEach(function(evt) {
-        window.removeEventListener(evt, trigger);
+        window.removeEventListener(evt, onInteraction);
       });
-      inject();
+      // Buffer briefly so fleeting cursor passes / scroll-throughs don't trigger load
+      setTimeout(inject, INTERACTION_DELAY_MS);
     }
 
     INTERACTION_EVENTS.forEach(function(evt) {
-      window.addEventListener(evt, trigger, { passive: true });
+      window.addEventListener(evt, onInteraction, { passive: true });
     });
-    idleTimer = setTimeout(trigger, IDLE_TIMEOUT_MS);
+    idleTimer = setTimeout(inject, IDLE_TIMEOUT_MS);
   }
 
   function tryInject() {
