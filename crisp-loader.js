@@ -3,6 +3,8 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
 
 (function() {
   var COOKIE_NAME = "fs-cc";
+  var IDLE_TIMEOUT_MS = 5000;
+  var INTERACTION_EVENTS = ['mousemove', 'scroll', 'keydown', 'touchstart'];
 
   function isLoggedIn() {
     try {
@@ -41,8 +43,31 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
     d.getElementsByTagName("head")[0].appendChild(s);
   }
 
+  // Lazy-load Crisp on first user interaction or after IDLE_TIMEOUT_MS.
+  // Bots and instant-bouncers never trigger the load; real users see the
+  // widget ~50ms after they touch the page.
+  var lazyArmed = false;
+  function armLazyLoader() {
+    if (lazyArmed) return;
+    lazyArmed = true;
+
+    var idleTimer;
+    function trigger() {
+      if (idleTimer) clearTimeout(idleTimer);
+      INTERACTION_EVENTS.forEach(function(evt) {
+        window.removeEventListener(evt, trigger);
+      });
+      inject();
+    }
+
+    INTERACTION_EVENTS.forEach(function(evt) {
+      window.addEventListener(evt, trigger, { passive: true });
+    });
+    idleTimer = setTimeout(trigger, IDLE_TIMEOUT_MS);
+  }
+
   function tryInject() {
-    if (canLoad()) inject();
+    if (canLoad()) armLazyLoader();
   }
 
   tryInject();
