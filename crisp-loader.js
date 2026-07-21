@@ -33,10 +33,32 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
     return !!(c && c.analytics);
   }
 
+  // Crisp's client_default bundle uses lookbehind regexes, which Safari only
+  // parses from 16.4 (regression on their side, first seen 2026-06-23:
+  // ORDOTYPE-FRONTEND-1D5). On older WebKit the widget script dies at parse
+  // time anyway, so injecting it only produces a SyntaxError and a dead
+  // widget. Skip the injection and throw a titled reporting error instead
+  // (monitoring.js hooks window.onerror), so the affected-user count stays
+  // measurable in ONE clean Sentry issue while the raw noise stops.
+  function supportsCrispRuntime() {
+    try {
+      new RegExp("(?<=a)b");
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   var injected = false;
   function inject() {
     if (injected) return;
     injected = true;
+    if (!supportsCrispRuntime()) {
+      setTimeout(function() {
+        throw new Error("Crisp skipped: no regex lookbehind support (Safari < 16.4)");
+      }, 0);
+      return;
+    }
     var d = document;
     var s = d.createElement("script");
     s.src = "https://client.crisp.chat/l.js";
