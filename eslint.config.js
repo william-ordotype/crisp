@@ -11,7 +11,8 @@
 //     new RegExp("(?<=a)b") is runtime-only and stays allowed (it is the
 //     feature probe the loader relies on).
 // No style rules on purpose. Run: npx --yes eslint@10 .
-// (also run by .github/workflows/parse-floor.yml on every push)
+// (also run by .github/workflows/parse-floor.yml on every pull request and
+// every push to main)
 module.exports = [
   {
     files: ["**/*.js"],

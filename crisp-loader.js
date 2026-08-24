@@ -8,7 +8,8 @@
 //   2. Lookbehind inside a regex LITERAL: Safari <= 16.3. Use the
 //      new RegExp("...") string form (runtime-only), as in crispRuntimeGap().
 // Both are enforced by eslint.config.js (ecmaVersion 2019 parse + lookbehind
-// literal ban), run by .github/workflows/parse-floor.yml on every push.
+// literal ban), run by .github/workflows/parse-floor.yml on every pull
+// request and every push to main.
 window.$crisp = [];
 window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
 
@@ -52,7 +53,7 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
   // 2026-06-23: ORDOTYPE-FRONTEND-1D5). Either way the widget stays dead, so
   // injecting it only produces third-party SyntaxError noise. Skip the
   // injection and report a titled error instead, so each cohort stays
-  // measurable in ONE clean Sentry issue (the Sentry browser tag says which
+  // measurable in its own Sentry issue (the Sentry browser tag says which
   // browser). Both probes keep the unsupported token inside a string, so
   // this file itself still parses everywhere. Only a SyntaxError counts as
   // an engine gap: a CSP that refuses eval makes new Function throw an
@@ -61,25 +62,41 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
     try {
       new RegExp("(?<=a)b");
     } catch (e) {
-      if (e && e.name === "SyntaxError") return "engine lacks regex lookbehind (typically Safari < 16.4)";
+      if (e && e.name === "SyntaxError") {
+        return { kind: "NoLookbehind", why: "engine lacks regex lookbehind (typically Safari < 16.4)" };
+      }
     }
     try {
       new Function("return ({})?.a");
     } catch (e) {
-      if (e && e.name === "SyntaxError") return "engine lacks ES2020 syntax (typically Chrome < 80)";
+      if (e && e.name === "SyntaxError") {
+        return { kind: "NoES2020", why: "engine lacks ES2020 syntax (typically Chrome < 80)" };
+      }
     }
     return null;
   }
 
-  // Reported as an unhandled promise rejection, NOT as an async throw: WebKit
-  // sanitizes an exception thrown from a timer callback of a cross-origin
-  // classic script to "Script error." even with crossorigin="anonymous" on
-  // the embed tag (the previous setTimeout-throw version never produced a
-  // single Sentry event from Safari), whereas the rejection reaches the
-  // site-wide Sentry onunhandledrejection hook (auth-bundle GlobalHandlers)
-  // with its full message on both engines.
+  // Reported by dispatching a synthetic ErrorEvent at window, which invokes
+  // the site-wide window.onerror hook (Sentry GlobalHandlers in auth-bundle)
+  // with the full message on every engine, with or without crossorigin on
+  // the embed tag. The obvious alternatives are muted for a cross-origin
+  // classic script like this one: WebKit sanitizes an exception thrown from
+  // a timer callback to "Script error." even with crossorigin="anonymous"
+  // (the setTimeout-throw version never produced a single Sentry event from
+  // Safari), and Chromium never dispatches unhandledrejection for a promise
+  // created by a script fetched without CORS (Blink SanitizeScriptErrors
+  // gate), so Promise.reject is lost on embeds lacking crossorigin. Both are
+  // kept only as fallbacks. The error NAME differs per cohort because Sentry
+  // fingerprints on the exception type and stack, never on the message:
+  // with one name both cohorts would merge into a single issue titled after
+  // whichever reported first.
   function reportSkip(gap) {
-    var err = new Error("Crisp skipped: " + gap);
+    var err = new Error("Crisp skipped: " + gap.why);
+    err.name = "CrispSkipped" + gap.kind;
+    try {
+      window.dispatchEvent(new ErrorEvent("error", { message: err.message, error: err }));
+      return;
+    } catch (e) {}
     if (typeof Promise !== "undefined" && Promise.reject) {
       Promise.reject(err);
     } else {
@@ -97,6 +114,7 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
       return;
     }
     injected = true;
+    stopWaiting();
     var gap = crispRuntimeGap();
     if (gap) {
       reportSkip(gap);
@@ -131,7 +149,7 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
   }
 
   function armLazyLoader() {
-    if (lazyArmed) return;
+    if (injected || lazyArmed) return;
     lazyArmed = true;
     INTERACTION_EVENTS.forEach(function(evt) {
       window.addEventListener(evt, onInteraction, { passive: true });
