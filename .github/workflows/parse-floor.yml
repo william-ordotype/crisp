@@ -1,0 +1,21 @@
+# Parse-floor gate: fails the build if crisp-loader.js contains syntax newer
+# than ES2019 (?. and ?? kill Chrome < 80 / Safari < 13.1, ??= Chrome < 85 /
+# Safari < 14, class fields Safari < 14.1) or a lookbehind inside a regex
+# literal (Safari <= 16.3). Either one makes the WHOLE file fail to parse on
+# part of the old hospital fleet that still browses the site, killing Crisp
+# and its own reporting guard silently (Sentry ORDOTYPE-FRONTEND-1F7).
+# The rule set lives in eslint.config.js (parse errors only, no style rules).
+name: parse-floor
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  es2019-parse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npx --yes eslint@10 .
