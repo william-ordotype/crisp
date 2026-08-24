@@ -1,9 +1,10 @@
 // Served RAW from jsDelivr (william-ordotype/crisp@main) to every Webflow
 // page, including the old hospital browsers still on Chrome 78 / Safari 13.
-// Two syntax traps kill this WHOLE file at parse time on those browsers
+// Two syntax traps kill this WHOLE file at parse time on part of that fleet
 // (loader dead, runtime guard included, no titled Sentry issue):
-//   1. ES2020+ syntax (?. / ?? / ??= / class fields): Chrome < 80,
-//      Sentry ORDOTYPE-FRONTEND-1F7.
+//   1. Anything newer than ES2019: ?. and ?? (Chrome < 80 / Safari < 13.1,
+//      Sentry ORDOTYPE-FRONTEND-1F7), ??= (Chrome < 85 / Safari < 14),
+//      class fields (Safari < 14.1)...
 //   2. Lookbehind inside a regex LITERAL: Safari <= 16.3. Use the
 //      new RegExp("...") string form (runtime-only), as in crispRuntimeGap().
 // Both are enforced by eslint.config.js (ecmaVersion 2019 parse + lookbehind
@@ -43,49 +44,62 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
     return !!(c && c.analytics);
   }
 
-  // Crisp's own bundle (client_default / client_legacy, injected by l.js as a
-  // type=module script) needs regex lookbehind (Safari 16.4+, regression on
-  // their side first seen 2026-06-23: ORDOTYPE-FRONTEND-1D5) AND ES2020
-  // syntax (Chrome 80+: the "legacy" variant l.js serves to Chrome 63-117 is
-  // not transpiled below ES2020). On older engines the bundle dies at parse
-  // and the widget stays dead, so injecting it only produces third-party
-  // SyntaxError noise. Skip the injection and throw a titled reporting error
-  // instead, so each affected cohort stays measurable in ONE clean Sentry
-  // issue. The throw reaches Sentry through the site-wide window.onerror
-  // hook (auth-bundle GlobalHandlers) only when the embed tag carries
-  // crossorigin="anonymous"; without it the browser mutes it to
-  // "Script error." and it is dropped.
-  // Both probes keep the unsupported token inside a string, so this file
-  // itself still parses everywhere.
+  // Crisp's own bundle (client_default / client_legacy: the same ES2020
+  // module, injected by l.js) fails on old engines in two ways: on
+  // Chrome < 80 / Safari < 13.1 it does not parse (optional chaining), and on
+  // Safari 13.1-16.3 it parses but builds a lookbehind RegExp from a string
+  // during module init and dies there (regression on Crisp's side first seen
+  // 2026-06-23: ORDOTYPE-FRONTEND-1D5). Either way the widget stays dead, so
+  // injecting it only produces third-party SyntaxError noise. Skip the
+  // injection and report a titled error instead, so each cohort stays
+  // measurable in ONE clean Sentry issue (the Sentry browser tag says which
+  // browser). Both probes keep the unsupported token inside a string, so
+  // this file itself still parses everywhere. Only a SyntaxError counts as
+  // an engine gap: a CSP that refuses eval makes new Function throw an
+  // EvalError on every browser, which must not disable Crisp.
   function crispRuntimeGap() {
     try {
       new RegExp("(?<=a)b");
     } catch (e) {
-      return "no regex lookbehind support (Safari < 16.4)";
+      if (e && e.name === "SyntaxError") return "engine lacks regex lookbehind (typically Safari < 16.4)";
     }
     try {
       new Function("return ({})?.a");
     } catch (e) {
-      return "no ES2020 syntax support (Chrome < 80)";
+      if (e && e.name === "SyntaxError") return "engine lacks ES2020 syntax (typically Chrome < 80)";
     }
     return null;
+  }
+
+  // Reported as an unhandled promise rejection, NOT as an async throw: WebKit
+  // sanitizes an exception thrown from a timer callback of a cross-origin
+  // classic script to "Script error." even with crossorigin="anonymous" on
+  // the embed tag (the previous setTimeout-throw version never produced a
+  // single Sentry event from Safari), whereas the rejection reaches the
+  // site-wide Sentry onunhandledrejection hook (auth-bundle GlobalHandlers)
+  // with its full message on both engines.
+  function reportSkip(gap) {
+    var err = new Error("Crisp skipped: " + gap);
+    if (typeof Promise !== "undefined" && Promise.reject) {
+      Promise.reject(err);
+    } else {
+      setTimeout(function() { throw err; }, 0);
+    }
   }
 
   var injected = false;
   function inject() {
     if (injected) return;
     if (!canLoad()) {
-      // Consent revoked between arming and firing: disarm so the next
-      // grant can arm again instead of loading after the refusal
-      lazyArmed = false;
+      // Consent revoked between arming and firing: stand down until the
+      // next grant instead of loading after the refusal
+      disarmLazyLoader();
       return;
     }
     injected = true;
     var gap = crispRuntimeGap();
     if (gap) {
-      setTimeout(function() {
-        throw new Error("Crisp skipped: " + gap);
-      }, 0);
+      reportSkip(gap);
       return;
     }
     var d = document;
@@ -100,28 +114,39 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
   // Bots and instant-bouncers never trigger the load; real users see the
   // widget ~50ms after they touch the page.
   var lazyArmed = false;
+  var idleTimer = null;
+
+  function stopWaiting() {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = null;
+    INTERACTION_EVENTS.forEach(function(evt) {
+      window.removeEventListener(evt, onInteraction);
+    });
+  }
+
+  function onInteraction() {
+    stopWaiting();
+    // Buffer briefly so fleeting cursor passes / scroll-throughs don't trigger load
+    setTimeout(inject, INTERACTION_DELAY_MS);
+  }
+
   function armLazyLoader() {
     if (lazyArmed) return;
     lazyArmed = true;
-
-    var idleTimer;
-    function onInteraction() {
-      if (idleTimer) clearTimeout(idleTimer);
-      INTERACTION_EVENTS.forEach(function(evt) {
-        window.removeEventListener(evt, onInteraction);
-      });
-      // Buffer briefly so fleeting cursor passes / scroll-throughs don't trigger load
-      setTimeout(inject, INTERACTION_DELAY_MS);
-    }
-
     INTERACTION_EVENTS.forEach(function(evt) {
       window.addEventListener(evt, onInteraction, { passive: true });
     });
     idleTimer = setTimeout(inject, IDLE_TIMEOUT_MS);
   }
 
+  function disarmLazyLoader() {
+    stopWaiting();
+    lazyArmed = false;
+  }
+
   function tryInject() {
     if (canLoad()) armLazyLoader();
+    else disarmLazyLoader();
   }
 
   tryInject();
