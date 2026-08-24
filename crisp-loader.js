@@ -107,7 +107,10 @@ function pushCrispData() {
     try {
       const memberData = JSON.parse(msMemberData);
       userId = memberData.id;
-      email = memberData.auth?.email;
+      // No ES2020 syntax (?. / ??) anywhere in this file: one token makes the
+      // whole loader fail to parse on old hospital browsers (Chrome 78,
+      // Sentry ORDOTYPE-FRONTEND-1F7) and Crisp never loads for them
+      email = memberData.auth && memberData.auth.email;
     } catch (e) {
       console.error("Failed to parse Memberstack data", e);
     }
