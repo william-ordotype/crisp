@@ -1,3 +1,13 @@
+// Served RAW from jsDelivr (william-ordotype/crisp@main) to every Webflow
+// page, including the old hospital browsers still on Chrome 78 / Safari 13.
+// Two syntax traps kill this WHOLE file at parse time on those browsers
+// (loader dead, runtime guard included, no titled Sentry issue):
+//   1. ES2020+ syntax (?. / ?? / ??= / class fields): Chrome < 80,
+//      Sentry ORDOTYPE-FRONTEND-1F7.
+//   2. Lookbehind inside a regex LITERAL: Safari <= 16.3. Use the
+//      new RegExp("...") string form (runtime-only), as in crispRuntimeGap().
+// Both are enforced by eslint.config.js (ecmaVersion 2019 parse + lookbehind
+// literal ban), run by .github/workflows/parse-floor.yml on every push.
 window.$crisp = [];
 window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
 
@@ -33,29 +43,48 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
     return !!(c && c.analytics);
   }
 
-  // Crisp's client_default bundle uses lookbehind regexes, which Safari only
-  // parses from 16.4 (regression on their side, first seen 2026-06-23:
-  // ORDOTYPE-FRONTEND-1D5). On older WebKit the widget script dies at parse
-  // time anyway, so injecting it only produces a SyntaxError and a dead
-  // widget. Skip the injection and throw a titled reporting error instead
-  // (monitoring.js hooks window.onerror), so the affected-user count stays
-  // measurable in ONE clean Sentry issue while the raw noise stops.
-  function supportsCrispRuntime() {
+  // Crisp's own bundle (client_default / client_legacy, injected by l.js as a
+  // type=module script) needs regex lookbehind (Safari 16.4+, regression on
+  // their side first seen 2026-06-23: ORDOTYPE-FRONTEND-1D5) AND ES2020
+  // syntax (Chrome 80+: the "legacy" variant l.js serves to Chrome 63-117 is
+  // not transpiled below ES2020). On older engines the bundle dies at parse
+  // and the widget stays dead, so injecting it only produces third-party
+  // SyntaxError noise. Skip the injection and throw a titled reporting error
+  // instead, so each affected cohort stays measurable in ONE clean Sentry
+  // issue. The throw reaches Sentry through the site-wide window.onerror
+  // hook (auth-bundle GlobalHandlers) only when the embed tag carries
+  // crossorigin="anonymous"; without it the browser mutes it to
+  // "Script error." and it is dropped.
+  // Both probes keep the unsupported token inside a string, so this file
+  // itself still parses everywhere.
+  function crispRuntimeGap() {
     try {
       new RegExp("(?<=a)b");
-      return true;
     } catch (e) {
-      return false;
+      return "no regex lookbehind support (Safari < 16.4)";
     }
+    try {
+      new Function("return ({})?.a");
+    } catch (e) {
+      return "no ES2020 syntax support (Chrome < 80)";
+    }
+    return null;
   }
 
   var injected = false;
   function inject() {
     if (injected) return;
+    if (!canLoad()) {
+      // Consent revoked between arming and firing: disarm so the next
+      // grant can arm again instead of loading after the refusal
+      lazyArmed = false;
+      return;
+    }
     injected = true;
-    if (!supportsCrispRuntime()) {
+    var gap = crispRuntimeGap();
+    if (gap) {
       setTimeout(function() {
-        throw new Error("Crisp skipped: no regex lookbehind support (Safari < 16.4)");
+        throw new Error("Crisp skipped: " + gap);
       }, 0);
       return;
     }
@@ -63,6 +92,7 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
     var s = d.createElement("script");
     s.src = "https://client.crisp.chat/l.js";
     s.async = 1;
+    s.crossOrigin = "anonymous";
     d.getElementsByTagName("head")[0].appendChild(s);
   }
 
@@ -99,20 +129,18 @@ window.CRISP_WEBSITE_ID = "7fcb1bdb-58d0-49a9-a269-397bac574b0b";
 })();
 
 function pushCrispData() {
-  const msMemberData = localStorage.getItem("_ms-mem");
-  let userId = null;
-  let email = null;
+  var msMemberData = localStorage.getItem("_ms-mem");
+  var userId = null;
+  var email = null;
 
   if (msMemberData) {
     try {
-      const memberData = JSON.parse(msMemberData);
+      var memberData = JSON.parse(msMemberData);
       userId = memberData.id;
-      // No ES2020 syntax (?. / ??) anywhere in this file: one token makes the
-      // whole loader fail to parse on old hospital browsers (Chrome 78,
-      // Sentry ORDOTYPE-FRONTEND-1F7) and Crisp never loads for them
+      // Deliberately not memberData.auth?.email: see the parse-floor header
       email = memberData.auth && memberData.auth.email;
     } catch (e) {
-      console.error("Failed to parse Memberstack data", e);
+      console.error("[CrispLoader] Failed to parse Memberstack data", e);
     }
   }
 
@@ -120,7 +148,7 @@ function pushCrispData() {
     window.$crisp.push(["set", "session:data", ["ms_member_id", userId]]);
   }
 
-  const pageUrl = window.location.href;
+  var pageUrl = window.location.href;
   window.$crisp.push(["set", "session:data", ["page_url", pageUrl]]);
 
   if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
